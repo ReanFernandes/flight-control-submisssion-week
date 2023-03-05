@@ -1,8 +1,10 @@
 from model import *
 from casadi import *
 import time
+from pylab import spy
+import matplotlib.pyplot as plt
 
-def main(horizon):
+def main( time_step, horizon = 20, ):
     # define the starting state of the drone, and the desired state we wwant to reach
     x_start = [0.25, 0.15, 0.0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     x_des = [0.3, 0.2, 0.7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -10,17 +12,17 @@ def main(horizon):
                      'acceptable_tol': 1e-8, 
                      'acceptable_obj_change_tol': 1e-6, 
                      'fast_step_computation': 'yes'},
-                     "jit" :True, 
+                     "jit" :False, 
                      "jit_options" : {"flags" : "-O1"}}
     
     N = horizon # number of control intervals
     Q = diag([120,
                 100,
                 100,
-                1*10,
-                1*10,
-                1*10,
-                1*10,
+                1e-2,
+                1e-2,
+                1e-2,
+                1e-2,
                 7e-1,
                 1.0,
                 1.0,
@@ -55,15 +57,18 @@ def main(horizon):
     cost = 0
     state_dev = X - repmat(x_ref, 1, N+1)
     state_dev[:, -1] *= terminal_weight # Weight the last state more
-    cost += trace(state_dev.T @ Q @ state_dev)
+    # cost += trace(state_dev.T @ Q @ state_dev)
+    cost += state_dev[:, -1].T @ Q @ state_dev[:, -1]
     control_dev = U - repmat(u_ref, 1, N)
-    control_dev[:, -1] *= terminal_weight # the last control must be similar to the hover speed
+    # control_dev = U
+    control_dev[:, -1] *= 2 # the last control must be similar to the hover speed
     cost += trace(control_dev.T @ R @ control_dev)
+    # cost += control_dev[:, -1].T @ R @ control_dev[:, -1]
     cost_fn = Function('cost_fn', [X, U], [cost]) # this cost Implements the Q-weighted L-2 norm of the state devviation, and the R-weighted L-2 norm of the control deviation. The last state is multiplied by a terminal cost weight.
     
     # define integrator
     M = 2 # RK4 steps per interval
-    time_step = h*2 / M
+    
     DT = time_step
     x_integrated = SX(mod.nx, N)
     for i in range(N):
@@ -137,24 +142,33 @@ def main(horizon):
     time_s = time.time()
     sol = solver(x0=w0, lbx=lbw, ubx=ubw, lbg=lbg, ubg=ubg, p=vertcat(x_start, x_des, u_hover))
     time_e = time.time()
-    iteration_count =  solver.stats()["iter_count"]
-    
+    print(f"IPOPT status: %s" % solver.stats()["return_status"])
 
     solution_time = time_e - time_s
     w_opt = sol['x'].full().flatten()
     x_opt = w_opt[ : nx * (N+1)].reshape((N+1, nx))
     u_opt = w_opt[nx * (N+1) : ].reshape((N, nu))
+    # fig  = plt.figure()
+    # ax = fig.add_subplot(111, projection='3d')
+    # ax.plot(x_opt[:, 0], x_opt[:, 1], x_opt[:, 2], 'o')
+    # plt.show()
+    # deviation =[np.linalg.norm( x_opt[i,:3] - x_des[:3]) for i in range(N+1)]
+    final_dev = np.linalg.norm( x_opt[-1,:3] - x_des[:3])
+    #save deviation to a file with the title 'dev' with the infromation as horizon N, and deviation  deviation
+    with open('dev.txt', 'a') as f:
+        f.write('sol_time' +  str(solution_time * 1000) + 't_ '+ str(time_step) + 'deviation = ' + str(final_dev) + '\n')
     # save the data to text files named after the the first three entries of x_start and x_des
-    np.savetxt('X/x_opt_' + str(x_start[0]) + '_' + str(x_start[1]) + '_' + str(x_start[2]) + '_' + str(x_des[0]) + '_' + str(x_des[1]) + '_' + str(x_des[2]) + '.txt', x_opt)
-    np.savetxt('U/u_opt_' + str(x_start[0]) + '_' + str(x_start[1]) + '_' + str(x_start[2]) + '_' + str(x_des[0]) + '_' + str(x_des[1]) + '_' + str(x_des[2]) + '.txt', u_opt)
-    # write the Horizon length N, time step time_step, frequency freq , solution time solution_time, number of iteration iteration_count, number of rk4 steps M to a file in folder statistics to the file stats.txt under column headings
-    with open('statistics/dms_stats.txt', 'a') as f:
-        f.write(str(N) + ' ' + str(time_step) + ' ' + str(freq) + ' ' + str(solution_time * 1000) + ' ' + str(iteration_count) + ' ' + str(M) + '' + str(np.round(x_opt[-1,:3], 2)) + '\n')
+    # np.savetxt('X/x_opt_' + str(x_start[0]) + '_' + str(x_start[1]) + '_' + str(x_start[2]) + '_' + str(x_des[0]) + '_' + str(x_des[1]) + '_' + str(x_des[2]) + '.txt', x_opt)
+    # np.savetxt('U/u_opt_' + str(x_start[0]) + '_' + str(x_start[1]) + '_' + str(x_start[2]) + '_' + str(x_des[0]) + '_' + str(x_des[1]) + '_' + str(x_des[2]) + '.txt', u_opt)
+    # # write the Horizon length N, time step time_step, frequency freq , solution time solution_time, number of iteration iteration_count, number of rk4 steps M to a file in folder statistics to the file stats.txt under column headings
+    # with open('statistics/dms_stats.txt', 'a') as f:
+    #     f.write(str(N) + ' ' + str(time_step) + ' ' + str(freq) + ' ' + str(solution_time * 1000) + ' ' + str(iteration_count) + ' ' + str(M) + '' + str(np.round(x_opt[-1,:3], 2)) + '\n')
            
 
 
 
 if __name__ == '__main__':
-    horizon = [40, 45, 50]
-    for N in horizon:
-        main(N)
+    # horizon = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+    time_step = [0.001, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+    for N in time_step:
+        main(time_step=N)
